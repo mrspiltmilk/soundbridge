@@ -123,7 +123,7 @@ const App: React.FC = () => {
       </div>
 
       <footer className="fixed bottom-8 text-[9px] uppercase tracking-[0.4em] text-slate-400 dark:text-neutral-600 pointer-events-none text-center px-4">
-        Made with ♥ for music lovers.
+        Made with ♥ for music lovers
       </footer>
     </div>
   );
