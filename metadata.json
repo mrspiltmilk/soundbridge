@@ -1,0 +1,5 @@
+{
+  "name": "SoundBridge: Universal Music Link Converter",
+  "description": "Seamlessly convert music links between Spotify, Apple Music, and Tidal using AI-powered search grounding.",
+  "requestFramePermissions": []
+}
