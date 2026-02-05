@@ -3,45 +3,34 @@ import { GoogleGenAI } from "@google/genai";
 import { MusicMetadata, MusicLinkResult } from "../types";
 
 export const resolveMusicLink = async (inputUrl: string): Promise<MusicMetadata> => {
-  const apiKey = process.env.API_KEY;
-  
-  // Vite's 'define' might stringify undefined as "undefined"
-  if (!apiKey || apiKey === 'undefined' || apiKey === 'null') {
-    throw new Error("API Key is missing. Please ensure you have added API_KEY to your Vercel Environment Variables and redeployed the app.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  // Directly initialize with process.env.API_KEY as per instructions
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `
-    I need to find universal share links for a piece of music.
+    I need to find universal streaming links for a piece of music.
     Original Link: ${inputUrl}
     
     TASK:
     1. Identify the Track/Album Title and Artist from the provided link.
-    2. Use Google Search to find the official direct streaming links for this EXACT track or album on:
-       - Spotify
-       - Apple Music
-       - Tidal
-       - YouTube Music
-    
-    CRITICAL LINK FORMATS:
-    - Spotify: https://open.spotify.com/track/[ID] or https://open.spotify.com/album/[ID]
-    - Apple Music: https://music.apple.com/[country]/album/[slug]/[ID]
-    - Tidal: https://tidal.com/track/[ID] or https://tidal.com/album/[ID]
-    - YouTube Music: https://music.youtube.com/watch?v=[ID] or https://music.youtube.com/playlist?list=[ID]
-    
-    INSTRUCTIONS:
-    - Only return valid direct links.
-    - Do not return search query URLs.
-    - If a platform doesn't have the track, omit it.
+    2. Use Google Search to find the OFFICIAL direct streaming links for this exact track or album on:
+       - Spotify (open.spotify.com)
+       - Apple Music (music.apple.com)
+       - Tidal (tidal.com)
+       - YouTube Music (music.youtube.com)
     
     RESPONSE FORMAT:
+    Return the information in this format:
     Title: [Name]
     Artist: [Name]
-    Spotify: [Link]
-    Apple Music: [Link]
-    Tidal: [Link]
-    YouTube Music: [Link]
+    Links:
+    - Spotify: [URL]
+    - Apple Music: [URL]
+    - Tidal: [URL]
+    - YouTube Music: [URL]
+
+    IMPORTANT: 
+    - Only return direct URLs to the track/album, not search result pages.
+    - Ensure URLs are fully qualified.
   `;
 
   try {
@@ -57,72 +46,71 @@ export const resolveMusicLink = async (inputUrl: string): Promise<MusicMetadata>
     const text = response.text || "";
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
 
-    // Extract basic metadata
-    const titleMatch = text.match(/Title:\s*(.*)/i);
-    const artistMatch = text.match(/Artist:\s*(.*)/i);
-    
-    const links: MusicLinkResult[] = [];
-    
-    // Robust regex patterns for deep links
+    // Improved Regex Patterns to handle variations (subdomains, localizations, etc.)
     const patterns = {
-      'Spotify': /https?:\/\/open\.spotify\.com\/(track|album|playlist)\/[a-zA-Z0-9?=&_-]+/i,
-      'Apple Music': /https?:\/\/music\.apple\.com\/[a-z]{2}\/(album|song|playlist)\/[a-zA-Z0-9\-_/]+(\?i=[0-9]+)?/i,
-      'Tidal': /https?:\/\/(www\.)?tidal\.com\/(browse\/)?(track|album|playlist)\/[0-9a-zA-Z_-]+/i,
+      'Spotify': /https?:\/\/open\.spotify\.com\/(track|album|playlist|artist)\/[a-zA-Z0-9]+[?a-zA-Z0-9=_]*/i,
+      'Apple Music': /https?:\/\/(music|itunes)\.apple\.com\/[a-z]{2}\/(album|song|playlist|artist)\/[a-zA-Z0-9\-_/]+/i,
+      'Tidal': /https?:\/\/(www\.|listen\.|browse\.)?tidal\.com\/(browse\/)?(track|album|playlist|artist)\/[0-9a-zA-Z_-]+/i,
       'YouTube Music': /https?:\/\/music\.youtube\.com\/(watch\?v=|playlist\?list=)[a-zA-Z0-9_-]+/i
     };
 
-    const extractLink = (platform: keyof typeof patterns): string | null => {
-      const pattern = patterns[platform];
-      
-      // 1. Check grounding chunks first (usually contains the most accurate search results)
-      const officialChunk = groundingChunks.find(c => {
-        const uri = c.web?.uri || "";
-        return uri.match(pattern) && !uri.includes('/search');
-      });
-      if (officialChunk?.web?.uri) return officialChunk.web.uri;
-      
-      // 2. Fallback to extracting from the generated text
-      const textMatches = text.match(new RegExp(pattern, 'gi'));
-      if (textMatches && textMatches.length > 0) {
-        const validLink = textMatches.find(link => !link.toLowerCase().includes('/search'));
-        if (validLink) return validLink;
-      }
-      
-      return null;
-    };
-
+    const links: MusicLinkResult[] = [];
     const platformKeys: (keyof typeof patterns)[] = ['Spotify', 'Apple Music', 'Tidal', 'YouTube Music'];
+
+    // 1. First, check the text response for explicitly listed links
+    const lines = text.split('\n');
     
-    for (const key of platformKeys) {
-      const url = extractLink(key);
-      if (url) {
-        links.push({ platform: key as any, url });
+    for (const platform of platformKeys) {
+      const pattern = patterns[platform];
+      let foundUrl: string | null = null;
+
+      // Check grounding chunks (highest reliability for search results)
+      const chunkMatch = groundingChunks.find(c => c.web?.uri?.match(pattern));
+      if (chunkMatch?.web?.uri) {
+        foundUrl = chunkMatch.web.uri;
+      }
+
+      // Fallback: Check the text output itself
+      if (!foundUrl) {
+        for (const line of lines) {
+          if (line.toLowerCase().includes(platform.toLowerCase())) {
+            const matches = line.match(pattern);
+            if (matches) {
+              foundUrl = matches[0];
+              break;
+            }
+          }
+        }
+      }
+
+      // Final Fallback: Scan the entire text if the platform-specific line check failed
+      if (!foundUrl) {
+        const globalMatches = text.match(pattern);
+        if (globalMatches) {
+          foundUrl = globalMatches[0];
+        }
+      }
+
+      if (foundUrl) {
+        links.push({ platform, url: foundUrl });
       }
     }
 
+    // Extract basic metadata with fallbacks
+    const titleMatch = text.match(/Title:\s*(.*)/i);
+    const artistMatch = text.match(/Artist:\s*(.*)/i);
+    
     if (links.length === 0) {
-      throw new Error("We identified the track, but couldn't find verified links on other platforms. Try a different link or check the track name.");
+      throw new Error("No matching streaming links found. The track might be exclusive to one platform or the search grounding failed to find direct matches.");
     }
 
     return {
-      title: titleMatch ? titleMatch[1].trim() : "Music Track",
-      artist: artistMatch ? artistMatch[1].trim() : "Artist",
+      title: titleMatch ? titleMatch[1].trim() : "Unknown Track",
+      artist: artistMatch ? artistMatch[1].trim() : "Unknown Artist",
       links
     };
   } catch (error: any) {
-    console.error("Gemini API Error details:", error);
-    
-    // Preserve our specific error messages
-    if (error.message.includes("API Key") || error.message.includes("identified the track")) {
-      throw error;
-    }
-
-    // Handle standard Gemini API errors
-    const errorMessage = error?.message || "";
-    if (errorMessage.includes("403") || errorMessage.includes("API_KEY_INVALID")) {
-      throw new Error("Invalid API Key. Please verify your key at Google AI Studio.");
-    }
-    
-    throw new Error("The music resolution service is currently unavailable or the link is invalid. Please try again later.");
+    console.error("Gemini Resolution Error:", error);
+    throw new Error(error.message || "Failed to resolve links. Please ensure the URL is valid.");
   }
 };
