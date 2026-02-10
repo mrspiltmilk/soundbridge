@@ -23,6 +23,10 @@ interface ResultCardProps {
 }
 
 const ResultCard: React.FC<ResultCardProps> = ({ metadata, onReset }) => {
+  const platforms: ('Spotify' | 'Apple Music' | 'Tidal' | 'YouTube Music')[] = [
+    'Spotify', 'Apple Music', 'Tidal', 'YouTube Music'
+  ];
+
   const platformConfig: Record<string, { color: string; bg: string; label: string; icon: keyof typeof Icons }> = {
     'Spotify': { color: 'text-[#1DB954]', bg: 'bg-[#1DB954]/5', label: 'Spotify', icon: 'Spotify' },
     'Apple Music': { color: 'text-[#FA2D48]', bg: 'bg-[#FA2D48]/5', label: 'Apple Music', icon: 'Apple Music' },
@@ -42,67 +46,85 @@ const ResultCard: React.FC<ResultCardProps> = ({ metadata, onReset }) => {
     }, 1500);
   };
 
+  const isComplete = metadata.links.length === platforms.length;
+  const showArtist = metadata.type !== 'artist' && metadata.artist;
+
   return (
     <div className="w-full space-y-12 animate-in slide-in-bottom">
-      <div className="text-center space-y-2">
-        <h2 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest px-4">
-          {metadata.title}
+      <div className="text-center space-y-3">
+        <h2 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-[0.2em] px-4">
+          {metadata.title || 'Resolving...'}
         </h2>
-        <div className="flex items-center justify-center gap-2">
-          <span className="w-4 h-px bg-fuchsia-500/30"></span>
-          <p className="text-fuchsia-500 text-[9px] font-black uppercase tracking-[0.4em]">
-            {metadata.artist}
+        <div className="flex items-center justify-center gap-3">
+          <span className="w-6 h-px bg-fuchsia-500/20"></span>
+          <p className="text-fuchsia-500 text-[10px] font-black uppercase tracking-[0.4em]">
+            {showArtist ? metadata.artist : (metadata.type === 'artist' ? 'Verified Artist' : 'Tuning...')}
           </p>
-          <span className="w-4 h-px bg-fuchsia-500/30"></span>
+          <span className="w-6 h-px bg-fuchsia-500/20"></span>
         </div>
       </div>
 
-      <div className="grid gap-3">
-        {metadata.links.map((link) => {
-          const config = platformConfig[link.platform];
+      <div className="grid gap-4">
+        {platforms.map((p) => {
+          const link = metadata.links.find(l => l.platform === p);
+          const config = platformConfig[p];
           if (!config) return null;
           const IconComp = Icons[config.icon];
+          
           return (
             <div 
-              key={link.platform} 
-              className="group flex items-center justify-between p-4 bg-white dark:bg-neutral-900/40 border border-slate-100 dark:border-neutral-800/50 rounded-2xl transition-all hover:border-fuchsia-500/20 shadow-sm"
+              key={p} 
+              className={`group flex items-center justify-between p-5 bg-white dark:bg-neutral-950/40 border border-slate-100 dark:border-neutral-900/50 rounded-2xl transition-all duration-500 shadow-sm ${!link ? 'opacity-20' : 'hover:border-fuchsia-500/30'}`}
             >
-              <div className="flex items-center gap-4">
-                <div className={`w-9 h-9 flex items-center justify-center rounded-xl ${config.bg} ${config.color}`}>
+              <div className="flex items-center gap-5">
+                <div className={`w-10 h-10 flex items-center justify-center rounded-xl ${config.bg} ${config.color} ${!link ? 'grayscale' : ''}`}>
                   <IconComp />
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-900 dark:text-white">
+                  <span className="text-[11px] font-black uppercase tracking-widest text-slate-900 dark:text-white">
                     {config.label}
                   </span>
                 </div>
               </div>
               
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={(e) => copyToClipboard(link.url, e)}
-                  className="text-[9px] font-black uppercase tracking-widest text-slate-400 hover:text-fuchsia-500 transition-colors px-2"
-                >
-                  Copy
-                </button>
-                <a
-                  href={link.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-4 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full text-[8px] font-black uppercase tracking-widest transition-transform active:scale-95"
-                >
-                  Open
-                </a>
-              </div>
+              {link ? (
+                <div className="flex items-center gap-5 animate-in fade-in">
+                  <button
+                    onClick={(e) => copyToClipboard(link.url, e)}
+                    className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-400 hover:text-fuchsia-500 transition-colors"
+                  >
+                    Copy
+                  </button>
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-5 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full text-[9px] font-black uppercase tracking-widest transition-transform active:scale-95"
+                  >
+                    Open
+                  </a>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 pr-4">
+                  <div className="w-1 h-1 bg-slate-200 dark:bg-neutral-800 rounded-full animate-pulse"></div>
+                  <div className="w-1 h-1 bg-slate-200 dark:bg-neutral-800 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      <div className="flex justify-center pt-4">
+      <div className="flex flex-col items-center gap-8 pt-6">
+        {!isComplete && (
+          <div className="flex items-center gap-3">
+            <div className="w-1.5 h-1.5 bg-fuchsia-500 rounded-full animate-ping"></div>
+            <span className="text-[8px] font-black uppercase tracking-[0.4em] text-fuchsia-500/40">Broadcasting...</span>
+          </div>
+        )}
         <button 
           onClick={onReset}
-          className="text-[9px] font-black uppercase tracking-[0.5em] text-slate-400 hover:text-fuchsia-500 transition-colors"
+          className="text-[10px] font-black uppercase tracking-[0.6em] text-slate-400 hover:text-fuchsia-600 transition-colors py-2 px-4 border border-transparent hover:border-slate-100 dark:hover:border-neutral-800 rounded-full"
         >
           ← New Session
         </button>

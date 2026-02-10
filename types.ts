@@ -2,14 +2,12 @@
 export interface MusicLinkResult {
   platform: 'Spotify' | 'Apple Music' | 'Tidal' | 'YouTube Music';
   url: string;
-  title?: string;
 }
 
 export interface MusicMetadata {
   title: string;
   artist: string;
-  album?: string;
-  artworkUrl?: string;
+  type: 'track' | 'album' | 'artist' | 'unknown';
   links: MusicLinkResult[];
 }
 

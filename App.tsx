@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import MusicLinkInput from './components/MusicLinkInput';
 import ResultCard from './components/ResultCard';
-import { resolveMusicLink } from './services/geminiService';
+import { streamMusicLinks } from './services/geminiService';
 import { AppState, MusicMetadata } from './types';
 
-// Inline SVGs for guaranteed rendering
 const Icons = {
   Spotify: () => (
     <svg viewBox="0 0 24 24" className="w-7 h-7 fill-current" xmlns="http://www.w3.org/2000/svg"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.508 17.302c-.223.367-.704.484-1.071.261-2.973-1.819-6.716-2.228-11.125-1.222-.419.095-.839-.168-.934-.587-.095-.419.168-.839.587-.934 4.828-1.103 8.956-.628 12.308 1.42.368.223.485.705.262 1.072zm1.47-3.253c-.281.455-.878.6-1.333.319-3.403-2.093-8.591-2.701-12.615-1.478-.512.155-1.045-.138-1.201-.65-.155-.512.138-1.045.65-1.201 4.595-1.397 10.312-.724 14.2 1.667.456.282.601.878.32 1.333-.001 0-.001.001-.001.01zm.126-3.414c-4.085-2.426-10.816-2.651-14.733-1.462-.625.189-1.282-.167-1.471-.792-.189-.625.167-1.282.792-1.471 4.493-1.363 11.931-1.101 16.64 1.693.562.333.751 1.058.418 1.62-.333.562-1.058.751-1.62.418-.001-.001-.001-.001-.026-.006z"/></svg>
@@ -26,6 +26,10 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(true);
   const [loadingText, setLoadingText] = useState('Mapping the sonic landscape');
+  
+  // Use a ref to track the current state to avoid stale closures in streaming callbacks
+  const stateRef = useRef<AppState>(AppState.IDLE);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   useEffect(() => {
     const initialTheme = localStorage.getItem('theme') === 'dark' || !('theme' in localStorage);
@@ -61,10 +65,17 @@ const App: React.FC = () => {
 
   const handleConvert = async (url: string) => {
     setState(AppState.LOADING);
+    setMetadata(null);
     setError(null);
+    
     try {
-      const result = await resolveMusicLink(url);
-      setMetadata(result);
+      await streamMusicLinks(url, (partialMetadata) => {
+        setMetadata(partialMetadata);
+        // Transition to success view as soon as we have a title or one link
+        if (stateRef.current !== AppState.SUCCESS && (partialMetadata.links.length > 0 || partialMetadata.title)) {
+          setState(AppState.SUCCESS);
+        }
+      });
       setState(AppState.SUCCESS);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");

@@ -2,105 +2,141 @@
 import { GoogleGenAI } from "@google/genai";
 import { MusicMetadata, MusicLinkResult } from "../types";
 
-export const resolveMusicLink = async (inputUrl: string): Promise<MusicMetadata> => {
+export const streamMusicLinks = async (
+  inputUrl: string, 
+  onUpdate: (metadata: MusicMetadata) => void
+): Promise<void> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  // Streamlined, imperative prompt for faster processing
-  const prompt = `Find official direct streaming links for the music at ${inputUrl}.
-Required platforms: Spotify, Apple Music, Tidal, YouTube Music.
+  const prompt = `You are an elite Music Metadata Bridge.
+Source link: ${inputUrl}
 
-Output strictly in this format:
-Title: [Name]
-Artist: [Name]
+TASKS:
+1. Determine if the link is an ARTIST, ALBUM, or TRACK.
+2. Identify the specific entity. If the artist name is ambiguous (e.g., "u", "A"), use search to cross-reference their exact discography or unique ID from the source URL to find the matching profile on other platforms.
+3. Find the official direct deep links for this exact entity on Spotify, Apple Music, Tidal, and YouTube Music.
+
+OUTPUT FORMAT:
+Type: [artist/album/track]
+Title: [Entity Name]
+Artist: [Artist Name, or N/A if it is an Artist profile]
 Links:
-- Spotify: [URL]
-- Apple Music: [URL]
-- Tidal: [URL]
-- YouTube Music: [URL]
+Spotify: [Full Deep URL]
+Apple Music: [Full Deep URL]
+Tidal: [Full Deep URL]
+YouTube Music: [Full Deep URL]
 
-Rules:
-- NO markdown formatting (no asterisks).
-- ONLY direct track/album URLs.
-- Do not explain yourself.`;
+RULES:
+- Never return search result URLs (URLs containing 'search').
+- Only use deep links (e.g., /artist/, /album/, /track/, /song/, /channel/).
+- If you cannot find a verified match for a platform, omit it entirely.`;
+
+  let accumulatedText = "";
+  const metadata: MusicMetadata = {
+    title: "",
+    artist: "",
+    type: "unknown",
+    links: []
+  };
+
+  // Auto-populate the source URL so the UI reflects it immediately
+  const lowerUrl = inputUrl.toLowerCase();
+  if (lowerUrl.includes('spotify.com') && !lowerUrl.includes('search')) {
+    metadata.links.push({ platform: 'Spotify', url: inputUrl });
+  } else if (lowerUrl.includes('apple.com') && !lowerUrl.includes('search')) {
+    metadata.links.push({ platform: 'Apple Music', url: inputUrl });
+  } else if (lowerUrl.includes('tidal.com') && !lowerUrl.includes('search')) {
+    metadata.links.push({ platform: 'Tidal', url: inputUrl });
+  } else if (lowerUrl.includes('youtube.com') && !lowerUrl.includes('search')) {
+    metadata.links.push({ platform: 'YouTube Music', url: inputUrl });
+  }
+
+  // Initial update to trigger UI instantly if a valid link was detected
+  onUpdate({ ...metadata });
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+    const responseStream = await ai.models.generateContentStream({
+      model: 'gemini-3-pro-preview',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
         temperature: 0,
-        // Disable thinking budget to minimize latency for straightforward search tasks
-        thinkingConfig: { thinkingBudget: 0 }
+        thinkingConfig: { thinkingBudget: 2000 }
       },
     });
 
-    const text = response.text || "";
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-
-    const patterns = {
-      'Spotify': /https?:\/\/open\.spotify\.com\/(track|album|playlist|artist)\/[a-zA-Z0-9]+[?a-zA-Z0-9=_]*/i,
-      'Apple Music': /https?:\/\/(music|itunes)\.apple\.com\/[a-z]{2}\/(album|song|playlist|artist)\/[a-zA-Z0-9\-_/]+/i,
-      'Tidal': /https?:\/\/(www\.|listen\.|browse\.)?tidal\.com\/(browse\/)?(track|album|playlist|artist)\/[0-9a-zA-Z_-]+/i,
-      'YouTube Music': /https?:\/\/music\.youtube\.com\/(watch\?v=|playlist\?list=)[a-zA-Z0-9_-]+/i
-    };
-
-    const links: MusicLinkResult[] = [];
-    const platformKeys: (keyof typeof patterns)[] = ['Spotify', 'Apple Music', 'Tidal', 'YouTube Music'];
-    const lines = text.split('\n');
-    
-    for (const platform of platformKeys) {
-      const pattern = patterns[platform];
-      let foundUrl: string | null = null;
-
-      const chunkMatch = groundingChunks.find(c => c.web?.uri?.match(pattern));
-      if (chunkMatch?.web?.uri) {
-        foundUrl = chunkMatch.web.uri;
+    for await (const chunk of responseStream) {
+      accumulatedText += chunk.text || "";
+      
+      // Extract Type
+      if (!metadata.type || metadata.type === 'unknown') {
+        const match = accumulatedText.match(/Type[\s\*:]*(artist|album|track)/i);
+        if (match) metadata.type = match[1].toLowerCase() as any;
+      }
+      
+      // Extract Title
+      if (!metadata.title) {
+        const match = accumulatedText.match(/Title[\s\*:]*([^\n\r]+)/i);
+        if (match) {
+          const cleaned = match[1].replace(/\*/g, '').trim();
+          if (cleaned && cleaned.toLowerCase() !== 'n/a') metadata.title = cleaned;
+        }
       }
 
-      if (!foundUrl) {
-        for (const line of lines) {
-          if (line.toLowerCase().includes(platform.toLowerCase())) {
-            const matches = line.match(pattern);
-            if (matches) {
-              foundUrl = matches[0];
-              break;
+      // Extract Artist
+      if (!metadata.artist) {
+        const match = accumulatedText.match(/Artist[\s\*:]*([^\n\r]+)/i);
+        if (match) {
+          const cleaned = match[1].replace(/\*/g, '').trim();
+          if (cleaned && cleaned.toLowerCase() !== 'n/a' && cleaned.toLowerCase() !== 'none') metadata.artist = cleaned;
+        }
+      }
+
+      // Extract Links from Grounding Metadata
+      const groundingChunks = chunk.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (groundingChunks) {
+        groundingChunks.forEach((c: any) => {
+          const uri = c.web?.uri;
+          if (uri && !uri.toLowerCase().includes('search')) {
+            if (uri.includes('spotify.com') && uri.match(/\/(track|album|artist)\//) && !metadata.links.find(l => l.platform === 'Spotify')) {
+              metadata.links.push({ platform: 'Spotify', url: uri });
+            } else if (uri.includes('apple.com') && uri.match(/\/(album|song|artist|playlist)\//) && !metadata.links.find(l => l.platform === 'Apple Music')) {
+              metadata.links.push({ platform: 'Apple Music', url: uri });
+            } else if (uri.includes('tidal.com') && uri.match(/\/(track|album|artist|browse)\//) && !metadata.links.find(l => l.platform === 'Tidal')) {
+              metadata.links.push({ platform: 'Tidal', url: uri });
+            } else if (uri.includes('music.youtube.com') && uri.match(/\/(watch|playlist|channel|browse)/) && !metadata.links.find(l => l.platform === 'YouTube Music')) {
+              metadata.links.push({ platform: 'YouTube Music', url: uri });
             }
           }
+        });
+      }
+
+      // Extract Links from Text Response (Forgiving global regex)
+      const urlRegex = /(https?:\/\/[^\s\n\r"']+)/ig;
+      let match;
+      while ((match = urlRegex.exec(accumulatedText)) !== null) {
+        let url = match[1].replace(/[.,)]$/, ''); // clean trailing punctuation
+        if (url.toLowerCase().includes('search')) continue; // skip search URLs
+
+        if (url.includes('spotify.com') && !metadata.links.find(l => l.platform === 'Spotify')) {
+          metadata.links.push({ platform: 'Spotify', url });
+        } else if ((url.includes('music.apple.com') || url.includes('itunes.apple.com')) && !metadata.links.find(l => l.platform === 'Apple Music')) {
+          metadata.links.push({ platform: 'Apple Music', url });
+        } else if (url.includes('tidal.com') && !metadata.links.find(l => l.platform === 'Tidal')) {
+          metadata.links.push({ platform: 'Tidal', url });
+        } else if (url.includes('music.youtube.com') && !metadata.links.find(l => l.platform === 'YouTube Music')) {
+          metadata.links.push({ platform: 'YouTube Music', url });
         }
       }
 
-      if (!foundUrl) {
-        const globalMatches = text.match(pattern);
-        if (globalMatches) {
-          foundUrl = globalMatches[0];
-        }
-      }
-
-      if (foundUrl) {
-        links.push({ platform, url: foundUrl });
-      }
+      onUpdate({ ...metadata });
     }
 
-    const titleMatch = text.match(/Title:\s*(.*)/i);
-    const artistMatch = text.match(/Artist:\s*(.*)/i);
-    
-    if (links.length === 0) {
-      throw new Error("No matching streaming links found. The track might be exclusive or search results were inconclusive.");
+    if (metadata.links.length === 0) {
+      throw new Error("Unable to locate verified matches on any platform.");
     }
-
-    const cleanField = (raw: string | null | undefined) => {
-      if (!raw) return "";
-      return raw.replace(/\*/g, '').trim();
-    };
-
-    return {
-      title: titleMatch ? cleanField(titleMatch[1]) : "Unknown Track",
-      artist: artistMatch ? cleanField(artistMatch[1]) : "Unknown Artist",
-      links
-    };
   } catch (error: any) {
-    console.error("Gemini Resolution Error:", error);
-    throw new Error(error.message || "Failed to resolve links. Please ensure the URL is valid.");
+    console.error("SoundBridge Error:", error);
+    throw new Error(error.message || "The bridge collapsed. Please verify the link and try again.");
   }
 };
